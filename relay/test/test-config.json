@@ -1,0 +1,11 @@
+{
+  "ports": [18443],
+  "path": "/relay",
+  "certFile": "D:/Program/Pi_Agent/relay/test/cert.pem",
+  "keyFile": "D:/Program/Pi_Agent/relay/test/key.pem",
+  "agentToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "deviceToken": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "heartbeatMs": 30000,
+  "handshakeTimeoutMs": 3000,
+  "maxPayloadBytes": 4194304
+}

@@ -1,0 +1,33 @@
+<resources>
+    <string name="app_name">Pi Remote</string>
+
+    <string name="channel_name">连接状态</string>
+    <string name="channel_description">保持与电脑的终端连接</string>
+
+    <string name="connection_idle">未连接</string>
+    <string name="connection_connecting">正在连接中继…</string>
+    <string name="connection_connected_to">已连接 %1$s</string>
+    <string name="connection_no_agent">已连上中继，但电脑端 agent 不在线</string>
+    <string name="connection_disconnected">已断开：%1$s</string>
+
+    <string name="tab_sessions">会话</string>
+    <string name="tab_settings">设置</string>
+
+    <string name="settings_title">中继配置</string>
+    <string name="settings_endpoints">中继地址（每行一个，按顺序尝试）</string>
+    <string name="settings_token">设备 Token</string>
+    <string name="settings_pin">证书 SHA-256 指纹</string>
+    <string name="settings_hint">这些值来自电脑上的 .secrets/relay.json</string>
+    <string name="settings_save">保存并连接</string>
+
+    <string name="sessions_title">新建会话</string>
+    <string name="sessions_running">运行中的会话</string>
+    <string name="sessions_empty">还没有运行中的会话</string>
+    <string name="sessions_open">打开</string>
+    <string name="sessions_kill">终止</string>
+    <string name="sessions_refresh">刷新</string>
+
+    <string name="terminal_back">返回</string>
+    <string name="terminal_scroll_bottom">回到底部</string>
+    <string name="terminal_paste">粘贴</string>
+</resources>

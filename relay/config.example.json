@@ -1,0 +1,11 @@
+{
+  "ports": [443, 8443],
+  "path": "/relay",
+  "certFile": "/etc/pi-relay/cert.pem",
+  "keyFile": "/etc/pi-relay/key.pem",
+  "agentToken": "CHANGE_ME",
+  "deviceToken": "CHANGE_ME",
+  "heartbeatMs": 30000,
+  "handshakeTimeoutMs": 10000,
+  "maxPayloadBytes": 4194304
+}

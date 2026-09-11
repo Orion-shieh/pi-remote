@@ -1,0 +1,30 @@
+# Secrets and machine-specific configuration
+.secrets/
+agent/config.json
+relay/config.json
+relay/test/cert.pem
+relay/test/key.pem
+
+# Build output and caches
+node_modules/
+.stage/
+logs/
+build/
+.gradle/
+android/local.properties
+android/.kotlin/
+
+# Terminal captures are large and environment-specific
+agent/test/pi-capture.bin
+*.log
+
+.cache/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+android/app/build/
+android/terminal-emulator/build/
+android/terminal-view/build/
+android/build/
+captures/

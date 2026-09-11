@@ -1,0 +1,53 @@
+{
+  "relay": {
+    "endpoints": [
+      "wss://8.138.112.73:443/relay",
+      "wss://8.138.112.73:8443/relay"
+    ],
+    "agentId": "home-pc",
+    "agentToken": "CHANGE_ME",
+    "pinnedSha256": "CHANGE_ME"
+  },
+  "buffers": {
+    "maxLines": 5000,
+    "maxBytes": 2097152
+  },
+  "maxSessions": 8,
+  "defaultCols": 120,
+  "defaultRows": 30,
+  "defaultCwd": "D:/Program/Pi_Agent",
+  "shellEnv": {
+    "USERPROFILE": "C:/Users/Orion",
+    "HOMEDRIVE": "C:",
+    "HOMEPATH": "\\Users\\Orion",
+    "APPDATA": "C:/Users/Orion/AppData/Roaming",
+    "LOCALAPPDATA": "C:/Users/Orion/AppData/Local",
+    "TEMP": "C:/Users/Orion/AppData/Local/Temp",
+    "TMP": "C:/Users/Orion/AppData/Local/Temp"
+  },
+  "pathPrepend": [
+    "C:/Users/Orion/AppData/Local/pi-node/current",
+    "C:/Users/Orion/AppData/Local/Microsoft/WindowsApps"
+  ],
+  "presets": [
+    {
+      "id": "pi",
+      "name": "pi agent",
+      "description": "在项目目录中启动 pi",
+      "cwd": "D:/Program/Pi_Agent",
+      "shell": "auto",
+      "args": ["-NoLogo", "-NoProfile"],
+      "initialInput": "pi\r",
+      "initialInputQuietMs": 500,
+      "initialInputMaxWaitMs": 6000
+    },
+    {
+      "id": "ps",
+      "name": "PowerShell 7",
+      "description": "普通 PowerShell 会话",
+      "cwd": "C:/Users/Orion",
+      "shell": "auto",
+      "args": ["-NoLogo"]
+    }
+  ]
+}
