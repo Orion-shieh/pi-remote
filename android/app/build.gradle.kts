@@ -11,7 +11,7 @@ android {
     defaultConfig {
         applicationId = "com.piremote.app"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 28
         versionCode = 1
         versionName = "1.0"
     }
@@ -31,8 +31,17 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -59,4 +68,6 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
+
+    testImplementation(libs.junit)
 }

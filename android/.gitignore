@@ -1,0 +1,40 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+
+# Temporary logs, UI dumps & test captures
+ui*.xml
+em*.log
+emu_*.png
+test-conpty.js
+
+# Internal dev & architecture documents (excluded from public repo)
+AGENT_ARCHITECTURE_LOOPS.md
+CLAUDE_CODE_EXPLAINED.md
+HANDOFF.md
+MOBILE_LOCAL_AGENT.md
+NEXT_GEN_AGENT_ARCHITECTURE.md
+PI_AGENT_EXPLAINED.md
+.zcode/
+
+# Secrets & certificates
+.secrets/
+*.key
+*.keystore
+*.jks
+*.p12
+*.pem
+*.env*

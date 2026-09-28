@@ -9,12 +9,15 @@ import org.json.JSONObject
  *
  * [alive] is refreshed from the agent's session list, so a session that stopped
  * being reported (or reported `running = false`) shows up under "ended" without
- * losing its name and working directory.
+ * losing its name and working directory. [kind] distinguishes structured RPC
+ * sessions ("rpc", rendered by the GUI from pi events) from raw PTY sessions
+ * ("pty").
  */
 data class StoredSession(
     val sid: String,
     val name: String,
     val preset: String,
+    val kind: String,
     val cwd: String,
     val lastSeenAt: Long,
     val alive: Boolean,
@@ -43,6 +46,7 @@ class SessionHistory(context: Context) {
                     sid = sid,
                     name = obj.optString("name", "session"),
                     preset = obj.optString("preset"),
+                    kind = obj.optString("kind", "pty"),
                     cwd = obj.optString("cwd"),
                     lastSeenAt = obj.optLong("lastSeenAt", 0L),
                     // Anything that was alive when the app died is not alive now.
@@ -83,6 +87,7 @@ class SessionHistory(context: Context) {
                     .put("sid", session.sid)
                     .put("name", session.name)
                     .put("preset", session.preset)
+                    .put("kind", session.kind)
                     .put("cwd", session.cwd)
                     .put("lastSeenAt", session.lastSeenAt),
             )

@@ -7,6 +7,7 @@ const path = require('path');
 const { RelayClient } = require('./lib/relay-client');
 const { SessionManager } = require('./lib/session-manager');
 const { resolveShell } = require('./lib/shell');
+const { probePiVersion } = require('./lib/pi-rpc');
 
 const CONFIG_PATH = process.env.PI_AGENT_CONFIG || path.join(__dirname, 'config.json');
 
@@ -58,6 +59,12 @@ function main() {
     }
   }
   log(`shell resolved: ${shellPath}`);
+
+  if (config.piDir) {
+    probePiVersion(config.piDir)
+      .then((version) => log(`pi runtime: ${version} (${config.piDir})`))
+      .catch((err) => log(`pi probe failed: ${err.message} (piDir=${config.piDir})`));
+  }
 
   const transport = new RelayClient({
     endpoints: config.relay.endpoints,

@@ -73,10 +73,34 @@ class RelayClient(
         running = false
         reconnectScheduled = false
         handshakeComplete = false
-        webSocket?.close(1000, "client shutdown")
+        val oldWs = webSocket
+        val oldClient = client
         webSocket = null
-        client?.dispatcher?.executorService?.shutdown()
         client = null
+        try {
+            oldWs?.close(1000, "client shutdown")
+            oldClient?.dispatcher?.executorService?.shutdown()
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Forces an immediate reconnection: cancels any hung socket, resets backoff,
+     * and reconnects right away.
+     */
+    fun reconnect() {
+        running = true
+        reconnectScheduled = false
+        handshakeComplete = false
+        val oldWs = webSocket
+        val oldClient = client
+        webSocket = null
+        client = null
+        try {
+            oldWs?.cancel()
+            oldClient?.dispatcher?.executorService?.shutdownNow()
+        } catch (_: Exception) {}
+        backoffMs = INITIAL_BACKOFF_MS
+        connect()
     }
 
     fun send(json: String): Boolean {
@@ -127,6 +151,11 @@ class RelayClient(
     private val socketListener = object : WebSocketListener() {
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
+            if (webSocket != this@RelayClient.webSocket) {
+                Log.w(TAG, "stale socket open, closing")
+                try { webSocket.close(1000, "stale") } catch (_: Exception) {}
+                return
+            }
             Log.i(TAG, "socket open, sending hello as ${settings.deviceId}")
             val ts = System.currentTimeMillis()
             val nonce = randomNonce()
@@ -145,6 +174,7 @@ class RelayClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
+            if (webSocket != this@RelayClient.webSocket) return
             val message = ControlMessage.parse(text)
             if (!handshakeComplete) {
                 if (message is ControlMessage.HelloOk) {
@@ -159,6 +189,7 @@ class RelayClient(
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            if (webSocket != this@RelayClient.webSocket) return
             if (!handshakeComplete) return
             val data = bytes.toByteArray()
             val header = Protocol.readHeader(data) ?: return
@@ -174,17 +205,31 @@ class RelayClient(
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            if (webSocket != this@RelayClient.webSocket) {
+                Log.i(TAG, "stale socket failure ignored: ${t.message}")
+                return
+            }
             Log.w(TAG, "connection failure: ${t.javaClass.simpleName}: ${t.message}", t)
             scheduleReconnect(t.message ?: "connection failed")
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            if (webSocket != this@RelayClient.webSocket) return
             Log.i(TAG, "closing ($code $reason)")
             webSocket.close(1000, null)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            if (webSocket != this@RelayClient.webSocket) {
+                Log.i(TAG, "stale socket closed ignored ($code $reason)")
+                return
+            }
             Log.i(TAG, "closed ($code $reason)")
+            if (reason.equals("replaced", ignoreCase = true)) {
+                // Prevent infinite fight loop when another connection replaces this one
+                deliverDisconnected("replaced")
+                return
+            }
             scheduleReconnect(if (reason.isNotEmpty()) reason else "closed ($code)")
         }
     }
@@ -204,8 +249,14 @@ class RelayClient(
 
         main.postDelayed({
             reconnectScheduled = false
-            client?.dispatcher?.executorService?.shutdown()
+            val oldClient = client
+            val oldWs = webSocket
             client = null
+            webSocket = null
+            try {
+                oldWs?.cancel()
+                oldClient?.dispatcher?.executorService?.shutdown()
+            } catch (_: Exception) {}
             connect()
         }, delay)
     }

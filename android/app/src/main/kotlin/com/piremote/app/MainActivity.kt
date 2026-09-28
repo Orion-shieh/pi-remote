@@ -11,6 +11,8 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import com.piremote.app.service.TerminalService
 import com.piremote.app.ui.App
@@ -28,13 +30,9 @@ class MainActivity : ComponentActivity() {
         // forces edge-to-edge on Android 15+, but unless the activity opts in
         // explicitly the keyboard still overlays the content and the terminal
         // never shrinks to fit the visible area.
-        //
-        // The bar styles are pinned to `dark` on purpose: the app is always
-        // dark, so leaving the default in place lets a light system theme pick
-        // dark status bar icons, which are then invisible on our background.
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
 
         val repository = (application as PiRemoteApp).repository
@@ -43,10 +41,17 @@ class MainActivity : ComponentActivity() {
         startConnectionService()
 
         setContent {
-            PiRemoteTheme {
+            val themeMode by repository.settingsStore.themeModeFlow.collectAsState()
+            val guiFontScale by repository.settingsStore.guiFontScaleFlow.collectAsState()
+            PiRemoteTheme(themeMode = themeMode, guiFontScale = guiFontScale) {
                 App(repository)
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        (application as? PiRemoteApp)?.repository?.refresh()
     }
 
     /**

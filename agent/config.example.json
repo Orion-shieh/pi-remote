@@ -16,6 +16,7 @@
   "defaultCols": 120,
   "defaultRows": 30,
   "defaultCwd": "D:/Program/Pi_Agent",
+  "piDir": "C:/Users/Orion/AppData/Local/pi-node/current",
   "shellEnv": {
     "USERPROFILE": "C:/Users/Orion",
     "HOMEDRIVE": "C:",
@@ -23,7 +24,8 @@
     "APPDATA": "C:/Users/Orion/AppData/Roaming",
     "LOCALAPPDATA": "C:/Users/Orion/AppData/Local",
     "TEMP": "C:/Users/Orion/AppData/Local/Temp",
-    "TMP": "C:/Users/Orion/AppData/Local/Temp"
+    "TMP": "C:/Users/Orion/AppData/Local/Temp",
+    "TERMUX_VERSION": "0.118.0"
   },
   "pathPrepend": [
     "C:/Users/Orion/AppData/Local/pi-node/current",
@@ -36,10 +38,20 @@
       "description": "在项目目录中启动 pi",
       "cwd": "D:/Program/Pi_Agent",
       "shell": "auto",
-      "args": ["-NoLogo", "-NoProfile"],
+      "args": [
+        "-NoLogo",
+        "-NoProfile"
+      ],
       "initialInput": "pi\r",
       "initialInputQuietMs": 500,
       "initialInputMaxWaitMs": 6000
+    },
+    {
+      "id": "pi-gui",
+      "name": "Pi Agent GUI",
+      "description": "图形工作台会话（结构化 RPC）",
+      "type": "rpc",
+      "cwd": "D:/Program/Pi_Agent"
     },
     {
       "id": "ps",
@@ -47,7 +59,9 @@
       "description": "普通 PowerShell 会话",
       "cwd": "C:/Users/Orion",
       "shell": "auto",
-      "args": ["-NoLogo"]
+      "args": [
+        "-NoLogo"
+      ]
     }
   ]
 }

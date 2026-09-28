@@ -1,36 +1,11 @@
 'use strict';
 
 const crypto = require('crypto');
-const { execFile } = require('child_process');
 const pty = require('node-pty');
 
 const { RingBuffer } = require('./ringbuffer');
-
-// Builds the environment handed to the shell. When the agent runs as
-// LocalSystem the inherited environment points at SYSTEM's profile and lacks
-// the user's PATH, so pi would neither be found nor find its own settings.
-// Normalising the PATH key also avoids emitting a duplicate `Path`/`PATH` pair
-// into the child environment block.
-function buildEnv(envExtra, pathPrepend) {
-  const source = Object.assign({}, process.env, envExtra || {});
-  const env = {};
-  let existingPath = '';
-
-  for (const [key, value] of Object.entries(source)) {
-    if (key.toLowerCase() === 'path') {
-      existingPath = existingPath || value;
-      continue;
-    }
-    env[key] = value;
-  }
-
-  const parts = (pathPrepend || []).filter(Boolean);
-  if (existingPath) parts.push(existingPath);
-  if (parts.length > 0) env.Path = parts.join(';');
-  env.TERM = 'xterm-256color';
-
-  return env;
-}
+const { buildEnv } = require('./env');
+const { taskKillTree } = require('./kill-tree');
 
 class Session {
   constructor(options) {
@@ -53,6 +28,7 @@ class Session {
     } = options;
 
     this.sid = crypto.randomUUID();
+    this.kind = 'pty';
     this.presetId = preset.id;
     this.name = preset.name;
     this.cwd = cwd;
@@ -185,12 +161,8 @@ class Session {
       this._killWithPty();
     }, 5000);
 
-    // A non-zero exit from taskkill does not mean the session survived: killing
-    // a deep process tree routinely reports partial failures for children that
-    // had already exited. Treating that as a failure would make every kill also
-    // trip node-pty's console-dependent helper, so only the timeout falls back.
-    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, (err) => {
-      if (err && this.running) this._killError = err.message;
+    taskKillTree(pid, (msg) => {
+      if (this._onLog && this.running) this._onLog(msg);
     });
   }
 
@@ -208,6 +180,7 @@ class Session {
       sid: this.sid,
       name: this.name,
       preset: this.presetId,
+      kind: this.kind,
       cwd: this.cwd,
       running: this.running,
       exitCode: this.exitCode,
@@ -222,3 +195,4 @@ class Session {
 }
 
 module.exports = { Session };
+

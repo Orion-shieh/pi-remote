@@ -9,6 +9,7 @@ import android.text.InputType
 import android.util.AttributeSet
 import android.util.Log
 import android.util.TypedValue
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.VelocityTracker
@@ -29,6 +30,7 @@ import com.piremote.terminal.TextStyle
 import com.piremote.terminal.WcWidth
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.round
 
 /**
  * Renders the ported Termux terminal emulator and forwards input to it.
@@ -64,11 +66,23 @@ class TerminalView @JvmOverloads constructor(
     /** (scrolledBackPx, totalScrollablePx) */
     var onScrollChanged: ((Int, Int) -> Unit)? = null
 
+    /** Fired whenever new bytes are fed or content changes, allowing GUI view to sync. */
+    var onContentUpdated: (() -> Unit)? = null
+
+    /** Extracts all text currently in the emulator screen and history buffer. */
+    fun getTranscriptText(): String =
+        emulator?.screen?.transcriptTextWithFullLinesJoined.orEmpty()
+
     var theme: TerminalTheme = TerminalTheme.dark(spToPx(13f), Typeface.MONOSPACE)
         set(value) {
+            val oldW = cellWidth
+            val oldH = cellHeight
             field = value
             recomputeMetrics()
             emulator?.let { applyTheme(it) }
+            if (cellWidth != oldW || cellHeight != oldH) {
+                applyViewSize()
+            }
             invalidate()
         }
 
@@ -189,6 +203,13 @@ class TerminalView @JvmOverloads constructor(
     private var dragging = false
     private var draggingScrollbar = false
     private var pendingResize: Runnable? = null
+    private val pendingFeed = mutableListOf<ByteArray>()
+    private var renderScheduled = false
+    private val renderRunnable = Runnable {
+        renderScheduled = false
+        onScrollChanged?.invoke(scrollPx, maxScrollPx())
+        invalidate()
+    }
 
     private var cursorBlinkOn = true
     private val cursorBlink = object : Runnable {
@@ -213,12 +234,16 @@ class TerminalView @JvmOverloads constructor(
         textPaint.textSize = theme.textSizePx
         textPaint.isSubpixelText = true
 
-        // Mirrors Termux: the line height comes from the font's spacing, and the
-        // cell width is the measured advance with no rounding.
-        cellHeight = ceil(textPaint.fontSpacing).coerceAtLeast(1f)
-        fontAscent = ceil(textPaint.fontMetrics.ascent)
         cellWidth = textPaint.measureText("X").coerceAtLeast(1f)
+        val squareHeight = round(cellWidth * 2f)
+        val fontMetrics = textPaint.fontMetrics
+        val fontHeight = ceil(fontMetrics.descent - fontMetrics.ascent)
+        cellHeight = maxOf(squareHeight, fontHeight).coerceAtLeast(1f)
         rowHeightPx = cellHeight.toInt().coerceAtLeast(1)
+
+        // Center glyphs vertically within cellHeight
+        val verticalPadding = (cellHeight - (fontMetrics.descent - fontMetrics.ascent)) / 2f
+        fontAscent = fontMetrics.ascent - verticalPadding
 
         val sb = StringBuilder(" ")
         for (i in asciiMeasures.indices) {
@@ -237,6 +262,9 @@ class TerminalView @JvmOverloads constructor(
 
     // --------------------------------------------------------------- lifecycle
 
+    private var lastCols = 0
+    private var maxRowsForCols = 0
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         applyViewSize()
@@ -247,13 +275,35 @@ class TerminalView @JvmOverloads constructor(
         val cols = (width / cellWidth).toInt().coerceAtLeast(MIN_COLS)
         val rows = (height / cellHeight).toInt().coerceAtLeast(MIN_ROWS)
 
-        // The IME slides in over several frames, so onSizeChanged fires once per
-        // frame (measured: seven sizes within 200ms). Apply the change only once
-        // the size stops moving.
-        pendingResize?.let { removeCallbacks(it) }
-        val action = Runnable { commitSize(cols, rows) }
-        pendingResize = action
-        postDelayed(action, RESIZE_SETTLE_MS)
+        // When columns change (device rotation portrait <-> landscape or split-screen),
+        // reset the maximum unconstrained rows for the new width.
+        if (cols != lastCols) {
+            lastCols = cols
+            maxRowsForCols = rows
+        } else {
+            maxRowsForCols = maxOf(maxRowsForCols, rows)
+        }
+
+        // On mobile, the soft keyboard temporarily reduces the visible view height.
+        // Shrinking the underlying PTY causes destructive ConPTY repaints on Windows
+        // and jarring jumps when the keyboard closes.
+        // Instead, the emulator and remote PTY are pinned to the full unconstrained
+        // height (maxRowsForCols), and computeScreenShift cleanly pans the visible
+        // window to keep the cursor and prompt visible above the keyboard.
+        val targetRows = maxRowsForCols
+
+        if (emulator == null) {
+            // Initial layout must commit immediately without 120ms debounce so that
+            // buffered replay frames arriving upon attach are not dropped.
+            pendingResize?.let { removeCallbacks(it) }
+            pendingResize = null
+            commitSize(cols, targetRows)
+        } else {
+            pendingResize?.let { removeCallbacks(it) }
+            val action = Runnable { commitSize(cols, targetRows) }
+            pendingResize = action
+            postDelayed(action, RESIZE_SETTLE_MS)
+        }
     }
 
     private fun commitSize(cols: Int, rows: Int) {
@@ -273,18 +323,31 @@ class TerminalView @JvmOverloads constructor(
             )
             applyTheme(created)
             emulator = created
+
+            if (pendingFeed.isNotEmpty()) {
+                val chunks = ArrayList(pendingFeed)
+                pendingFeed.clear()
+                for (chunk in chunks) {
+                    feed(chunk, chunk.size)
+                }
+            }
         } else {
             existing.resize(cols, rows, cellWidth.toInt(), cellHeight.toInt())
         }
 
         scrollPx = scrollPx.coerceIn(0, maxScrollPx())
-        invalidate()
+        scheduleRender()
         onResize?.invoke(cols, rows)
     }
 
     /** Feeds raw bytes from the shell into the emulator. */
     fun feed(data: ByteArray, length: Int = data.size) {
-        val e = emulator ?: return
+        val e = emulator
+        if (e == null) {
+            pendingFeed.add(data.copyOf(length))
+            return
+        }
+
         // Read the scroll counter before appending so the viewport can be kept
         // pinned if the reader is looking at history.
         val pushed = e.getScrollCounter()
@@ -299,13 +362,52 @@ class TerminalView @JvmOverloads constructor(
         }
         scrollPx = scrollPx.coerceIn(0, maxScrollPx())
 
-        onScrollChanged?.invoke(scrollPx, maxScrollPx())
-        invalidate()
+        scheduleRender()
+        onContentUpdated?.invoke()
+    }
+
+    private fun scheduleRender() {
+        if (!renderScheduled) {
+            renderScheduled = true
+            if (isAttachedToWindow) {
+                postOnAnimation(renderRunnable)
+            } else {
+                post(renderRunnable)
+            }
+        }
     }
 
     // ---------------------------------------------------------------- geometry
 
     private fun transcriptRows(): Int = emulator?.screen?.activeTranscriptRows ?: 0
+
+    /**
+     * When the view shrinks (e.g. soft keyboard opening) before the debounced
+     * resize commits, the physical view height can hold fewer rows than [TerminalEmulator.mRows].
+     *
+     * In that transition, this returns how many rows down the top of the viewport
+     * must shift so that the active cursor and bottom prompt remain visible rather
+     * than being clipped off below the keyboard.
+     *
+     * This mirrors the logic in [TerminalBuffer.resize] by skipping blank rows at the bottom
+     * below the cursor (so short command sessions like fresh PowerShell stay at the top,
+     * while full-screen TUI apps like pi agent stay pinned at the bottom prompt).
+     */
+    private fun computeScreenShift(e: TerminalEmulator, visibleRows: Int): Int {
+        if (visibleRows >= e.mRows) return 0
+        var shift = e.mRows - visibleRows
+        val cursorRow = e.cursorRow
+        val screen = e.screen
+        for (i in e.mRows - 1 downTo 1) {
+            if (cursorRow >= i) break
+            val r = screen.externalToInternalRow(i)
+            val line = screen.allocateFullLineIfNecessary(r)
+            if (line.isBlank) {
+                if (--shift == 0) break
+            }
+        }
+        return shift.coerceIn(0, e.mRows - visibleRows)
+    }
 
     private fun maxScrollPx(): Int = transcriptRows() * rowHeightPx
 
@@ -342,14 +444,18 @@ class TerminalView @JvmOverloads constructor(
         canvas.drawColor(theme.background)
 
         val columns = e.mColumns
-        val rows = e.mRows
         val maxScroll = maxScrollPx()
         scrollPx = scrollPx.coerceIn(0, maxScroll)
+
+        val visibleRows = (height / rowHeightPx).coerceAtLeast(1)
+        val screenShift = if (scrollPx == 0) computeScreenShift(e, visibleRows) else 0
 
         val scrolledRows = scrollPx / rowHeightPx
         val fractional = scrollPx % rowHeightPx
         // External row 0 is the top of the live screen; transcript rows are negative.
-        val topRow = -scrolledRows
+        // During resize debounce transitions, screenShift offsets the live viewport
+        // downwards so the cursor line is kept on-screen above the keyboard.
+        val topRow = screenShift - scrolledRows
 
         val screen = e.screen
         val palette = e.mColors.mCurrentColors
@@ -359,7 +465,7 @@ class TerminalView @JvmOverloads constructor(
         // fractional offset shifts everything down, but that row only exists
         // once there is transcript - so clamp to what is actually addressable.
         val firstExternal = maxOf(topRow - 1, -transcriptRows())
-        val lastExternal = minOf(topRow + rows - 1, e.mRows - 1)
+        val lastExternal = minOf(topRow + visibleRows + 1, e.mRows - 1)
 
         for (externalRow in firstExternal..lastExternal) {
             val screenRow = externalRow - topRow
@@ -387,54 +493,102 @@ class TerminalView @JvmOverloads constructor(
 
         var column = 0
         var charIndex = 0
-        var measuredWidth = 0f
 
         while (column < columns && charIndex < charsUsed) {
             val runStartColumn = column
             val runStartChar = charIndex
             val runStyle = line.getStyle(column)
-            measuredWidth = 0f
 
-            while (column < columns && charIndex < charsUsed) {
-                if (line.getStyle(column) != runStyle) break
+            val firstCh = text[charIndex]
+            val firstHigh = Character.isHighSurrogate(firstCh)
+            val firstCodePoint = if (firstHigh && charIndex + 1 < charsUsed) {
+                Character.toCodePoint(firstCh, text[charIndex + 1])
+            } else {
+                firstCh.code
+            }
+            val firstWidth = WcWidth.width(firstCodePoint)
 
-                val ch = text[charIndex]
-                val high = Character.isHighSurrogate(ch)
-                val charsForCodePoint = if (high) 2 else 1
-                if (charIndex + charsForCodePoint > text.size) break
-
-                val codePoint =
-                    if (high) Character.toCodePoint(ch, text[charIndex + 1]) else ch.code
-                val width = WcWidth.width(codePoint)
-
-                measuredWidth += if (codePoint < asciiMeasures.size) {
-                    asciiMeasures[codePoint]
-                } else {
-                    textPaint.measureText(text, charIndex, charsForCodePoint)
-                }
-
-                column += if (width <= 0) 1 else width
+            if (firstWidth > 1) {
+                // Wide character (CJK or wide emoji: occupies firstWidth columns, typically 2)
+                val charsForCodePoint = if (firstHigh) 2 else 1
                 charIndex += charsForCodePoint
+                column += firstWidth
 
-                // Combining marks belong to the code point just consumed.
+                // Consume any following combining marks
                 while (charIndex < charsUsed && WcWidth.width(text, charIndex) <= 0) {
                     charIndex += if (Character.isHighSurrogate(text[charIndex])) 2 else 1
                 }
-            }
 
-            drawRun(
-                canvas = canvas,
-                text = text,
-                startChar = runStartChar,
-                endChar = charIndex,
-                startColumn = runStartColumn,
-                endColumn = column,
-                top = top,
-                baseline = baseline,
-                palette = palette,
-                style = runStyle,
-                measuredWidth = measuredWidth,
-            )
+                val measuredWidth = textPaint.measureText(text, runStartChar, charIndex - runStartChar)
+
+                drawRun(
+                    canvas = canvas,
+                    text = text,
+                    startChar = runStartChar,
+                    endChar = charIndex,
+                    startColumn = runStartColumn,
+                    endColumn = column,
+                    top = top,
+                    baseline = baseline,
+                    palette = palette,
+                    style = runStyle,
+                    measuredWidth = measuredWidth,
+                    isWide = true,
+                )
+            } else {
+                // Narrow / ASCII run (width <= 1). Keep grouping consecutive narrow characters
+                // of the same style without mixing in wide CJK glyphs.
+                var measuredWidth = 0f
+
+                while (column < columns && charIndex < charsUsed) {
+                    if (line.getStyle(column) != runStyle) break
+
+                    val ch = text[charIndex]
+                    val high = Character.isHighSurrogate(ch)
+                    val charsForCodePoint = if (high) 2 else 1
+                    if (charIndex + charsForCodePoint > charsUsed) break
+
+                    val codePoint = if (high) {
+                        Character.toCodePoint(ch, text[charIndex + 1])
+                    } else {
+                        ch.code
+                    }
+                    val width = WcWidth.width(codePoint)
+                    if (width > 1) {
+                        // Wide character reached: close the narrow run so it is not mixed
+                        break
+                    }
+
+                    measuredWidth += if (codePoint < asciiMeasures.size) {
+                        asciiMeasures[codePoint]
+                    } else {
+                        textPaint.measureText(text, charIndex, charsForCodePoint)
+                    }
+
+                    column += if (width <= 0) 1 else width
+                    charIndex += charsForCodePoint
+
+                    // Combining marks belong to the code point just consumed.
+                    while (charIndex < charsUsed && WcWidth.width(text, charIndex) <= 0) {
+                        charIndex += if (Character.isHighSurrogate(text[charIndex])) 2 else 1
+                    }
+                }
+
+                drawRun(
+                    canvas = canvas,
+                    text = text,
+                    startChar = runStartChar,
+                    endChar = charIndex,
+                    startColumn = runStartColumn,
+                    endColumn = column,
+                    top = top,
+                    baseline = baseline,
+                    palette = palette,
+                    style = runStyle,
+                    measuredWidth = measuredWidth,
+                    isWide = false,
+                )
+            }
         }
     }
 
@@ -450,6 +604,7 @@ class TerminalView @JvmOverloads constructor(
         palette: IntArray,
         style: Long,
         measuredWidth: Float,
+        isWide: Boolean,
     ) {
         if (endChar <= startChar) return
 
@@ -482,46 +637,124 @@ class TerminalView @JvmOverloads constructor(
             backColor = tmp
         }
 
-        var left = startColumn * cellWidth
-        val right = left + runColumns * cellWidth
+        val left = startColumn * cellWidth
+        val right = endColumn * cellWidth
+        val allocatedWidth = runColumns * cellWidth
+        val effectiveBg = if (backColor != theme.background) backColor else theme.background
 
-        // The font's natural advance rarely matches the grid exactly (and never
-        // for the odd non-monospace fallback glyph). Scale the run horizontally
-        // so it occupies precisely the columns it was allocated; without this the
-        // text walks out of step with the cursor over the length of a line.
-        val measuredColumns = measuredWidth / cellWidth
-        var scaled = false
-        if (abs(measuredColumns - runColumns) > 0.01f) {
-            canvas.save()
-            canvas.scale(runColumns / measuredColumns, 1f)
-            left *= measuredColumns / runColumns
-            scaled = true
-        }
-
+        // Draw background block if different from root theme background
         if (backColor != theme.background) {
             backgroundPaint.color = backColor
             canvas.drawRect(left, top, right, top + cellHeight, backgroundPaint)
         }
 
         if (!invisible) {
-            val run = String(text, startChar, endChar - startChar)
+            var renderedFore = foreColor
+            if (isDim) {
+                renderedFore = dim(renderedFore, effectiveBg)
+            }
+            renderedFore = ensureContrast(renderedFore, effectiveBg)
+
             textPaint.isFakeBoldText = bold
             textPaint.isUnderlineText = underline
             textPaint.textSkewX = if (italic) -0.35f else 0f
             textPaint.isStrikeThruText = strike
-            textPaint.color = if (isDim) dim(foreColor) else foreColor
-            canvas.drawText(run, left, baseline, textPaint)
-        }
+            textPaint.color = renderedFore
 
-        if (scaled) canvas.restore()
+            val count = endChar - startChar
+            if (isWide) {
+                // Wide character in a 2-column square box (width = 2*cellWidth, height = cellHeight).
+                // Center the naturally square CJK glyph inside the box.
+                // If glyph exceeds allocated box width (e.g. certain wide emojis), scale down to fit.
+                if (measuredWidth > allocatedWidth + 0.5f && measuredWidth > 0f) {
+                    val scale = allocatedWidth / measuredWidth
+                    canvas.save()
+                    canvas.scale(scale, 1f, left, baseline)
+                    canvas.drawText(text, startChar, count, left, baseline, textPaint)
+                    canvas.restore()
+                } else {
+                    val x = left + (allocatedWidth - measuredWidth) / 2f
+                    canvas.drawText(text, startChar, count, x, baseline, textPaint)
+                }
+            } else {
+                // Narrow ASCII / Latin run: perfectly unscaled 1.0x monospace advance.
+                // If non-monospace fallback symbols drift, scale with local pivot so position never shifts.
+                if (abs(measuredWidth - allocatedWidth) > 1.5f && measuredWidth > 0f) {
+                    val scale = allocatedWidth / measuredWidth
+                    canvas.save()
+                    canvas.scale(scale, 1f, left, baseline)
+                    canvas.drawText(text, startChar, count, left, baseline, textPaint)
+                    canvas.restore()
+                } else {
+                    canvas.drawText(text, startChar, count, left, baseline, textPaint)
+                }
+            }
+        }
     }
 
-    /** libvte/xterm style dimming: scale each channel to two thirds. */
-    private fun dim(color: Int): Int {
-        val r = (0xFF and (color shr 16)) * 2 / 3
-        val g = (0xFF and (color shr 8)) * 2 / 3
-        val b = (0xFF and color) * 2 / 3
+    /** Dimming: blend 40% towards effective background colour. */
+    private fun dim(color: Int, bgColor: Int): Int {
+        val rFg = (color shr 16) and 0xFF
+        val gFg = (color shr 8) and 0xFF
+        val bFg = color and 0xFF
+        val rBg = (bgColor shr 16) and 0xFF
+        val gBg = (bgColor shr 8) and 0xFF
+        val bBg = bgColor and 0xFF
+        val r = (rFg * 6 + rBg * 4) / 10
+        val g = (gFg * 6 + gBg * 4) / 10
+        val b = (bFg * 6 + bBg * 4) / 10
         return OPAQUE_MASK or (r shl 16) or (g shl 8) or b
+    }
+
+    /** ITU-R BT.601 perceptual luminance (0f..255f). */
+    private fun luminance(color: Int): Float {
+        val r = (color shr 16) and 0xFF
+        val g = (color shr 8) and 0xFF
+        val b = color and 0xFF
+        return 0.299f * r + 0.587f * g + 0.114f * b
+    }
+
+    /**
+     * Guarantees that text remains sharply legible regardless of arbitrary background blocks
+     * printed by CLI tools (such as Pi's badges, headers, or diff blocks).
+     */
+    private fun ensureContrast(foreColor: Int, backColor: Int): Int {
+        val bgLum = luminance(backColor)
+        val fgLum = luminance(foreColor)
+        val diff = abs(fgLum - bgLum)
+        val minDiff = 85f
+
+        if (diff >= minDiff) return foreColor
+
+        val r = (foreColor shr 16) and 0xFF
+        val g = (foreColor shr 8) and 0xFF
+        val b = foreColor and 0xFF
+
+        return if (bgLum >= 128f) {
+            // Light background: ensure foreground is sufficiently dark
+            val targetLum = (bgLum - minDiff).coerceIn(0f, 120f)
+            if (fgLum <= 1f) {
+                foreColor
+            } else {
+                val scale = (targetLum / fgLum).coerceIn(0f, 1f)
+                val nr = (r * scale).toInt().coerceIn(0, 255)
+                val ng = (g * scale).toInt().coerceIn(0, 255)
+                val nb = (b * scale).toInt().coerceIn(0, 255)
+                OPAQUE_MASK or (nr shl 16) or (ng shl 8) or nb
+            }
+        } else {
+            // Dark background: ensure foreground is sufficiently bright
+            val targetLum = (bgLum + minDiff).coerceIn(135f, 255f)
+            if (fgLum >= 254f) {
+                foreColor
+            } else {
+                val t = ((targetLum - fgLum) / (255f - fgLum)).coerceIn(0f, 1f)
+                val nr = (r + (255 - r) * t).toInt().coerceIn(0, 255)
+                val ng = (g + (255 - g) * t).toInt().coerceIn(0, 255)
+                val nb = (b + (255 - b) * t).toInt().coerceIn(0, 255)
+                OPAQUE_MASK or (nr shl 16) or (ng shl 8) or nb
+            }
+        }
     }
 
     /**
@@ -540,6 +773,7 @@ class TerminalView @JvmOverloads constructor(
         val left = cursorCol * cellWidth
         // cursorRow and topRow share the same external-row coordinates.
         val top = (cursorRow - topRow) * cellHeight + fractional
+        if (top + cellHeight < 0 || top > height) return
 
         when (e.cursorStyle) {
             TerminalEmulator.TERMINAL_CURSOR_STYLE_UNDERLINE -> {
@@ -563,10 +797,19 @@ class TerminalView @JvmOverloads constructor(
                 val line = e.screen.allocateFullLineIfNecessary(
                     e.screen.externalToInternalRow(cursorRow),
                 )
-                val ch = line.mText.getOrNull(cursorCol) ?: ' '
-                if (ch != ' ' && ch != '\u0000') {
-                    textPaint.color = palette[TextStyle.COLOR_INDEX_BACKGROUND]
-                    canvas.drawText(ch.toString(), left, top - fontAscent, textPaint)
+                val charIdx = line.findStartOfColumn(cursorCol)
+                if (charIdx in 0 until line.spaceUsed) {
+                    val ch = line.mText[charIdx]
+                    if (ch != ' ' && ch != '\u0000') {
+                        val isHigh = Character.isHighSurrogate(ch)
+                        val str = if (isHigh && charIdx + 1 < line.spaceUsed) {
+                            String(line.mText, charIdx, 2)
+                        } else {
+                            ch.toString()
+                        }
+                        textPaint.color = palette[TextStyle.COLOR_INDEX_BACKGROUND]
+                        canvas.drawText(str, left, top - fontAscent, textPaint)
+                    }
                 }
             }
         }
@@ -576,6 +819,7 @@ class TerminalView @JvmOverloads constructor(
         val max = maxScrollPx()
         if (max <= 0 || height <= 0) return null
 
+        val e = emulator ?: return null
         val visibleLines = (height / rowHeightPx).coerceAtLeast(1)
         val totalLines = (transcriptRows() + visibleLines).coerceAtLeast(1)
         val trackHeight = height.toFloat()
@@ -604,52 +848,62 @@ class TerminalView @JvmOverloads constructor(
     override fun onCheckIsTextEditor(): Boolean = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        // TYPE_NULL is the right type for a terminal: it stops the IME from
-        // swallowing Esc / Tab / arrows, which we need verbatim.
-        outAttrs.inputType = InputType.TYPE_NULL
-        // IME_ACTION_NONE is deliberately not set - it makes it impossible to
-        // enter a newline from the on-screen keyboard on some devices.
+        // Modern terminal IME configuration:
+        // TYPE_CLASS_TEXT + TYPE_TEXT_VARIATION_VISIBLE_PASSWORD + TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        // ensures Android soft keyboards (Gboard, Flyme, Sogou, WeChat, Baidu)
+        // do not swallow keystrokes, do not attempt dictionary autocorrect/autocapitalize,
+        // and immediately dispatch commits and key events.
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN
 
         return object : BaseInputConnection(this, true) {
 
-            /**
-             * Both callbacks flush the connection's editable rather than reading
-             * their argument.
-             *
-             * IMEs differ in how they deliver Latin text under TYPE_NULL. Gboard
-             * calls `commitText` per key, but Sogou and others push each letter
-             * through `setComposingText` and only end the composition later, so
-             * the text never appears in a `commitText` argument. `BaseInputConnection`
-             * buffers both paths into the same editable, so reading it back after
-             * either callback is what makes every IME behave the same.
-             */
             override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                if (!text.isNullOrEmpty()) {
+                    sendTextToTerminal(text)
+                }
                 super.commitText(text, newCursorPosition)
-                flushEditable()
+                editable?.clear()
                 return true
             }
 
             override fun finishComposingText(): Boolean {
-                super.finishComposingText()
-                flushEditable()
-                return true
+                val content = editable
+                if (content != null && content.isNotEmpty()) {
+                    val text = content.toString()
+                    content.clear()
+                    sendTextToTerminal(text)
+                }
+                return super.finishComposingText()
+            }
+
+            override fun sendKeyEvent(event: KeyEvent): Boolean {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    if (handleTerminalKey(event)) return true
+                } else if (event.action == KeyEvent.ACTION_UP) {
+                    if (event.keyCode != KeyEvent.KEYCODE_BACK) return true
+                }
+                return super.sendKeyEvent(event)
             }
 
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-                // Some keyboards request more than one character at a time.
-                repeat(beforeLength) { sendKeyCode(KeyEventCodes.DEL) }
+                repeat(beforeLength) {
+                    if (!sendKeyCode(KeyEventCodes.DEL)) {
+                        sendText("\u007f")
+                    }
+                }
                 return true
             }
 
-            private fun flushEditable() {
-                val content = editable ?: return
-                if (content.isEmpty()) return
-                // Copy then clear before sending: sending is re-entrant and the
-                // same text must not be delivered twice.
-                val text = content.toString()
-                content.clear()
-                sendTextToTerminal(text)
+            override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                repeat(beforeLength) {
+                    if (!sendKeyCode(KeyEventCodes.DEL)) {
+                        sendText("\u007f")
+                    }
+                }
+                return true
             }
         }
     }
@@ -808,7 +1062,58 @@ class TerminalView @JvmOverloads constructor(
         }
 
         // Not a special key: use the character the keyboard produced.
-        val unicode = event.unicodeChar
+        var unicode = event.unicodeChar
+        if (unicode == 0) {
+            unicode = event.getUnicodeChar(event.metaState)
+        }
+        if (unicode == 0) {
+            try {
+                unicode = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD).get(event.keyCode, event.metaState)
+            } catch (_: Exception) {}
+        }
+        if (unicode == 0) {
+            val shift = event.isShiftPressed xor event.isCapsLockOn
+            unicode = when (event.keyCode) {
+                in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z -> {
+                    val base = if (shift) 'A'.code else 'a'.code
+                    base + (event.keyCode - KeyEvent.KEYCODE_A)
+                }
+                in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> {
+                    if (event.isShiftPressed) {
+                        when (event.keyCode) {
+                            KeyEvent.KEYCODE_1 -> '!'.code
+                            KeyEvent.KEYCODE_2 -> '@'.code
+                            KeyEvent.KEYCODE_3 -> '#'.code
+                            KeyEvent.KEYCODE_4 -> '$'.code
+                            KeyEvent.KEYCODE_5 -> '%'.code
+                            KeyEvent.KEYCODE_6 -> '^'.code
+                            KeyEvent.KEYCODE_7 -> '&'.code
+                            KeyEvent.KEYCODE_8 -> '*'.code
+                            KeyEvent.KEYCODE_9 -> '('.code
+                            KeyEvent.KEYCODE_0 -> ')'.code
+                            else -> '0'.code + (event.keyCode - KeyEvent.KEYCODE_0)
+                        }
+                    } else {
+                        '0'.code + (event.keyCode - KeyEvent.KEYCODE_0)
+                    }
+                }
+                KeyEvent.KEYCODE_SPACE -> ' '.code
+                KeyEvent.KEYCODE_MINUS -> if (event.isShiftPressed) '_'.code else '-'.code
+                KeyEvent.KEYCODE_EQUALS -> if (event.isShiftPressed) '+'.code else '='.code
+                KeyEvent.KEYCODE_SLASH -> if (event.isShiftPressed) '?'.code else '/'.code
+                KeyEvent.KEYCODE_BACKSLASH -> if (event.isShiftPressed) '|'.code else '\\'.code
+                KeyEvent.KEYCODE_PERIOD -> if (event.isShiftPressed) '>'.code else '.'.code
+                KeyEvent.KEYCODE_COMMA -> if (event.isShiftPressed) '<'.code else ','.code
+                KeyEvent.KEYCODE_SEMICOLON -> if (event.isShiftPressed) ':'.code else ';'.code
+                KeyEvent.KEYCODE_APOSTROPHE -> if (event.isShiftPressed) '"'.code else '\''.code
+                KeyEvent.KEYCODE_GRAVE -> if (event.isShiftPressed) '~'.code else '`'.code
+                KeyEvent.KEYCODE_LEFT_BRACKET -> if (event.isShiftPressed) '{'.code else '['.code
+                KeyEvent.KEYCODE_RIGHT_BRACKET -> if (event.isShiftPressed) '}'.code else ']'.code
+                KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> '\r'.code
+                KeyEvent.KEYCODE_TAB -> '\t'.code
+                else -> 0
+            }
+        }
         if (unicode != 0) {
             emitCodePoint(
                 codePoint = unicode,
@@ -864,8 +1169,9 @@ class TerminalView @JvmOverloads constructor(
 
                     dragging && event.actionMasked == MotionEvent.ACTION_UP -> startFling()
 
-                    !dragging -> {
+                    !dragging && event.actionMasked == MotionEvent.ACTION_UP -> {
                         requestFocus()
+                        showKeyboard()
                         onTap?.invoke()
                         scrollToBottom()
                         performClick()
@@ -936,13 +1242,31 @@ class TerminalView @JvmOverloads constructor(
      * touch event finishes dispatching, because some IMEs ignore `showSoftInput`
      * invoked from inside `onTouchEvent`.
      */
+    override fun requestRectangleOnScreen(rectangle: android.graphics.Rect?, immediate: Boolean): Boolean {
+        // Prevent Android ViewRootImpl from scrolling/panning the Activity window to bring this native view to (0,0),
+        // which pushes the top navigation bar off-screen.
+        return false
+    }
+
+    override fun requestFocus(direction: Int, previouslyFocusedRect: android.graphics.Rect?): Boolean {
+        val result = super.requestFocus(direction, previouslyFocusedRect)
+        rootView?.scrollTo(0, 0)
+        return result
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        rootView?.scrollTo(0, 0)
+    }
+
     fun showKeyboard() {
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
             ?: return
         if (!hasFocus()) requestFocus()
         post {
-            if (!imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)) {
+            if (!imm.showSoftInput(this, 0)) {
                 imm.restartInput(this)
+                imm.showSoftInput(this, 0)
             }
         }
     }
@@ -964,6 +1288,8 @@ class TerminalView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         removeCallbacks(cursorBlink)
+        removeCallbacks(renderRunnable)
+        renderScheduled = false
         pendingResize?.let { removeCallbacks(it) }
         pendingResize = null
     }

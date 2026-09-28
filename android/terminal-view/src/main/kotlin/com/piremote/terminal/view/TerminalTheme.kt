@@ -31,10 +31,22 @@ class TerminalTheme(
         )
 
         private val LIGHT_BASE = intArrayOf(
-            0xFF1C1C1E.toInt(), 0xFFC0392B.toInt(), 0xFF2E7D32.toInt(), 0xFF9A7D0A.toInt(),
-            0xFF1F5FA8.toInt(), 0xFF7B3FA0.toInt(), 0xFF0F7B7B.toInt(), 0xFF4A4A4A.toInt(),
-            0xFF6E6E6E.toInt(), 0xFFE74C3C.toInt(), 0xFF43A047.toInt(), 0xFFC9A227.toInt(),
-            0xFF4285F4.toInt(), 0xFF9C4DCC.toInt(), 0xFF17A2A2.toInt(), 0xFF000000.toInt(),
+            0xFF24292E.toInt(), // 0: Black
+            0xFFD73A49.toInt(), // 1: Red
+            0xFF22863A.toInt(), // 2: Green
+            0xFFB08800.toInt(), // 3: Yellow
+            0xFF005CC5.toInt(), // 4: Blue
+            0xFF6F42C1.toInt(), // 5: Magenta
+            0xFF0086B3.toInt(), // 6: Cyan
+            0xFFE1E4E8.toInt(), // 7: Light Gray / White
+            0xFF959DA5.toInt(), // 8: Bright Black / Gray
+            0xFFCB2431.toInt(), // 9: Bright Red
+            0xFF28A745.toInt(), // 10: Bright Green
+            0xFFB08800.toInt(), // 11: Bright Yellow
+            0xFF2188FF.toInt(), // 12: Bright Blue
+            0xFF8A63D2.toInt(), // 13: Bright Magenta
+            0xFF3192AA.toInt(), // 14: Bright Cyan
+            0xFFFFFFFF.toInt(), // 15: Bright White
         )
 
         fun dark(textSizePx: Float, typeface: Typeface): TerminalTheme =
@@ -49,10 +61,10 @@ class TerminalTheme(
 
         fun light(textSizePx: Float, typeface: Typeface): TerminalTheme =
             TerminalTheme(
-                foreground = 0xFF1A1A1A.toInt(),
+                foreground = 0xFF24292E.toInt(),
                 background = 0xFFFAFAFA.toInt(),
-                cursor = 0xFF1A1A1A.toInt(),
-                palette = build(LIGHT_BASE, 0xFF1A1A1A.toInt(), 0xFFFAFAFA.toInt()),
+                cursor = 0xFF24292E.toInt(),
+                palette = build(LIGHT_BASE, 0xFF24292E.toInt(), 0xFFFAFAFA.toInt()),
                 typeface = typeface,
                 textSizePx = textSizePx,
             )

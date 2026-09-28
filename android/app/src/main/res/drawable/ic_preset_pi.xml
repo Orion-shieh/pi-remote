@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="470"
+    android:viewportHeight="470">
+    <!-- Pi Agent Official Geometric Logo (Coral, Teal, Gold) -->
+    <path
+        android:fillColor="#F09082"
+        android:pathData="M0,0h352.07v234.71h-117.36v-117.35h-234.71z" />
+    <path
+        android:fillColor="#4D9ABF"
+        android:pathData="M0,117.36h117.36v117.35h117.35v117.36h-117.35v117.36h-117.36z" />
+    <path
+        android:fillColor="#F1BE58"
+        android:pathData="M352.07,234.71h117.36v234.72h-117.36z" />
+</vector>
