@@ -8,14 +8,31 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
 
 系统由 **Android 客户端**、**公网中继服务 (Relay)** 和 **电脑端代理 (PC Agent)** 三部分组成：
 
-```
-┌─────────────────┐         TLS 1.3 / WSS          ┌──────────────────┐         TLS 1.3 / WSS          ┌──────────────────┐
-│   Android App   │ ◄────────────────────────────► │   中继服务 Relay  │ ◄────────────────────────────► │  电脑端 PC Agent  │
-│                 │                                │  (Node.js 守护)   │                                │  (Windows 服务)   │
-│ • 图形 / 终端视图 │  • 二进制多路复用帧 (8-byte 头) │                  │  • 二进制多路复用帧 (8-byte 头) │                  │
-│ • 远程文件与会话 │  • HMAC-SHA256 签名握手鉴权     │ • 路由转发与心跳  │  • HMAC-SHA256 签名握手鉴权     │ • ConPTY 终端仿真 │
-│ • 手机本地 Agent│  • 证书 SHA-256 指纹强校验      │ • 零持久化中转   │  • 证书 SHA-256 指纹强校验      │ • pi RPC 子进程桥接│
-└─────────────────┘                                └──────────────────┘                                └──────────────────┘
+```mermaid
+flowchart LR
+    subgraph Client["📱 Android 客户端"]
+        direction TB
+        C1["图形视图 / 终端视图"]
+        C2["远程全盘文件与会话管理"]
+        C3["手机本地 AI Agent"]
+    end
+
+    subgraph Relay["☁️ 中继服务 Relay (Linux)"]
+        direction TB
+        R1["消息路由与状态广播"]
+        R2["心跳保活与连接感知"]
+        R3["零持久化纯内存中转"]
+    end
+
+    subgraph PC["🖥️ 电脑端 PC Agent (Windows)"]
+        direction TB
+        P1["ConPTY 终端仿真 (PowerShell 7)"]
+        P2["pi RPC 结构化子进程桥接"]
+        P3["全盘目录与持久化快照扫描"]
+    end
+
+    Client <== "TLS 1.3 / WSS<br/>8-byte 二进制多路复用<br/>HMAC-SHA256 签名握手<br/>证书 SHA-256 指纹校验" ==> Relay
+    Relay <== "TLS 1.3 / WSS<br/>8-byte 二进制多路复用<br/>HMAC-SHA256 签名握手<br/>证书 SHA-256 指纹校验" ==> PC
 ```
 
 - **无需公网 IP**：电脑端运行 Agent 守护服务，主动向中继服务器发起 WebSocket 连接；手机端同样连接中继。两侧均为出站连接，电脑位于局域网或 NAT 路由器后也能正常使用。
