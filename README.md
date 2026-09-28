@@ -2,6 +2,14 @@
 
 Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程 Agent（如 Pi Agent）的客户端应用。通过轻量中继服务，在电脑无需公网 IP 和端口转发的情况下，实现手机端对电脑终端操作与 Agent 运行状态的查看与交互。
 
+> 💡 **给 AI Agent 用户的极速上手指令**：
+> 如果你正在使用 AI 编程助手（如 Claude Code、Cursor、Windsurf、Pi Agent、GitHub Copilot CLI 等），无需手动配置，克隆本项目后直接对你的 Agent 发送：
+> 
+> ```text
+> 请阅读本项目 README.md，帮我检查当前电脑的环境依赖，配置好 agent/config.json 并运行脚本注册启动 PC Agent 服务。
+> ```
+> Agent 会自动检测你的 Node.js / PowerShell 环境、生成配置并完成电脑端守护服务的安装。
+
 ---
 
 ## 整体架构与互联机制
@@ -10,29 +18,12 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
 
 ```mermaid
 flowchart LR
-    subgraph Client["📱 Android 客户端"]
-        direction TB
-        C1["图形视图 / 终端视图"]
-        C2["远程全盘文件与会话管理"]
-        C3["手机本地 AI Agent"]
-    end
+    A["📱 Android 客户端<br/><br/>• 图形视图 / 终端视图<br/>• 远程全盘文件与会话管理<br/>• 手机本地 AI Agent"]
+    B["☁️ 中继服务 Relay (Linux)<br/><br/>• 消息路由与状态广播<br/>• 心跳保活与连接感知<br/>• 零持久化纯内存中转"]
+    C["🖥️ 电脑端 PC Agent (Windows)<br/><br/>• ConPTY 终端仿真 (PowerShell 7)<br/>• pi RPC 结构化子进程桥接<br/>• 全盘目录与持久化快照扫描"]
 
-    subgraph Relay["☁️ 中继服务 Relay (Linux)"]
-        direction TB
-        R1["消息路由与状态广播"]
-        R2["心跳保活与连接感知"]
-        R3["零持久化纯内存中转"]
-    end
-
-    subgraph PC["🖥️ 电脑端 PC Agent (Windows)"]
-        direction TB
-        P1["ConPTY 终端仿真 (PowerShell 7)"]
-        P2["pi RPC 结构化子进程桥接"]
-        P3["全盘目录与持久化快照扫描"]
-    end
-
-    Client <== "TLS 1.3 / WSS<br/>8-byte 二进制多路复用<br/>HMAC-SHA256 签名握手<br/>证书 SHA-256 指纹校验" ==> Relay
-    Relay <== "TLS 1.3 / WSS<br/>8-byte 二进制多路复用<br/>HMAC-SHA256 签名握手<br/>证书 SHA-256 指纹校验" ==> PC
+    A <== "TLS 1.3 / WSS<br/>8-byte 二进制多路复用<br/>HMAC-SHA256 签名握手<br/>证书 SHA-256 指纹校验" ==> B
+    B <== "TLS 1.3 / WSS<br/>8-byte 二进制多路复用<br/>HMAC-SHA256 签名握手<br/>证书 SHA-256 指纹校验" ==> C
 ```
 
 - **无需公网 IP**：电脑端运行 Agent 守护服务，主动向中继服务器发起 WebSocket 连接；手机端同样连接中继。两侧均为出站连接，电脑位于局域网或 NAT 路由器后也能正常使用。
