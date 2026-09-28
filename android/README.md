@@ -12,9 +12,9 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
 ┌─────────────────┐         TLS 1.3 / WSS          ┌──────────────────┐         TLS 1.3 / WSS          ┌──────────────────┐
 │   Android App   │ ◄────────────────────────────► │   中继服务 Relay  │ ◄────────────────────────────► │  电脑端 PC Agent  │
 │                 │                                │  (Node.js 守护)   │                                │  (Windows 服务)   │
-│ • 图形 / 终端视图 │  • 二进制多路复用帧 (8-byte 头) │                  │  • 二进制多路复用帧 (8-byte 头) │                  │
-│ • 远程文件与会话 │  • HMAC-SHA256 签名握手鉴权     │ • 路由转发与心跳  │  • HMAC-SHA256 签名握手鉴权     │ • ConPTY 终端仿真 │
-│ • 手机本地 Agent│  • 证书 SHA-256 指纹强校验      │ • 零持久化中转   │  • 证书 SHA-256 指纹强校验      │ • pi RPC 子进程桥接│
+│ • 图形 / 终端视图│  • 二进制多路复用帧 (8-byte 头) │                  │  • 二进制多路复用帧 (8-byte 头) │                  │
+│ • 远程文件与会话  │  • HMAC-SHA256 签名握手鉴权     │ • 路由转发与心跳  │  • HMAC-SHA256 签名握手鉴权     │ • ConPTY 终端仿真 │
+│ • 手机本地 Agent │  • 证书 SHA-256 指纹强校验      │ • 零持久化中转   │  • 证书 SHA-256 指纹强校验      │ • pi RPC 子进程桥接│
 └─────────────────┘                                └──────────────────┘                                └──────────────────┘
 ```
 
@@ -25,12 +25,23 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
 
 ## 快速上手与配置指南
 
-系统使用需要三端配合：**部署中继服务器**、**电脑端运行 PC Agent**、**手机端配置连接**。
+> 💡 **给 AI Agent 用户的极速上手技巧**：
+> 如果你正在使用 AI 编程助手（如 Claude Code、Cursor、Windsurf、Pi Agent、Copilot CLI 等），无需手动逐行执行以下步骤，直接将本项目克隆到本地后对你的 Agent 发送：
+> 
+> ```text
+> 请阅读本项目 README.md，帮我检查当前电脑的环境依赖，配置好 agent/config.json 并运行脚本注册启动 PC Agent 服务。
+> ```
+> 
+> Agent 会自动检测你的 Node.js / PowerShell 环境、生成配置并完成服务部署。
+
+---
 
 ### 第一步：部署中继服务器（Relay）
+
 中继服务器负责手机与电脑之间的流量转发（需要一台具有公网 IP 的云服务器，如 Debian / Ubuntu）：
 
 1. **进入中继目录并运行部署脚本**：
+   
    ```bash
    cd relay/
    sudo ./deploy.sh
@@ -46,6 +57,7 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
 ---
 
 ### 第二步：电脑端配置（PC Agent）
+
 电脑端作为受控端，桥接 Windows 底层终端（PowerShell）与 Pi Agent 进程：
 
 1. **环境准备**：
@@ -53,6 +65,7 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
    - 若需使用图形工作台，安装 Pi 编码 Agent：`npm install -g @earendil-works/pi-coding-agent`。
 2. **配置文件**：
    在 `agent/` 目录下创建 `config.json`（可参考 `config.example.json`）：
+   
    ```json
    {
      "relay": {
@@ -96,6 +109,7 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
 ### 第四步：手机本地 AI Agent（可选）
 
 如需使用应用内脱机的手机本地 AI Agent：
+
 1. 点击底部「本地 Agent」标签页；
 2. 点击设置，选择服务商（如 DeepSeek、SiliconFlow、OpenAI 或局域网内运行的 Ollama `http://192.168.x.x:11434/v1`）；
 3. 填入对应的 API Key（存储于手机本地安全沙箱）；
@@ -117,11 +131,13 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
 ## 编译与构建
 
 ### 环境要求
+
 - Android Studio Ladybug (2024.2) 或更高版本
 - JDK 17
 - Android SDK 35 (最低支持 Android 8.0 / API 26)
 
 ### 编译 APK
+
 ```bash
 # 运行单元测试
 ./gradlew :terminal-emulator:test
@@ -130,10 +146,12 @@ Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程
 # 编译 Debug APK
 ./gradlew :app:assembleDebug
 ```
+
 产出路径：`app/build/outputs/apk/debug/app-debug.apk`。
 
 ---
 
 ## 许可证
+
 - 终端模拟器底层组件源自 [Termux](https://github.com/termux/termux-app)，遵循 GPLv3 许可证（详见 [LICENSE-GPLv3.md](terminal-emulator/LICENSE-GPLv3.md)）。
 - 其余代码遵循通用开源规范。
