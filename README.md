@@ -1,5 +1,13 @@
 # Pi Remote (Android)
 
+<p align="left">
+  <img src="https://img.shields.io/badge/Platform-Android%208.0%2B-3DDC84?style=flat&logo=android&logoColor=white" alt="Platform" />
+  <img src="https://img.shields.io/badge/Kotlin-2.0.21-7F52FF?style=flat&logo=kotlin&logoColor=white" alt="Kotlin" />
+  <img src="https://img.shields.io/badge/Compose-BOM%202024.10.01-4285F4?style=flat&logo=jetpackcompose&logoColor=white" alt="Compose" />
+  <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=flat&logo=nodedotjs&logoColor=white" alt="Node.js" />
+  <img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg" alt="License" />
+</p>
+
 Pi Remote 是一个在 Android 手机上远程控制电脑终端以及 AI 编程 Agent（如 Pi Agent）的客户端应用。通过轻量中继服务，在电脑无需公网 IP 和端口转发的情况下，实现手机端对电脑终端操作与 Agent 运行状态的查看与交互。
 
 > 💡 **给 AI Agent 用户的极速上手指令**：
@@ -105,14 +113,64 @@ flowchart LR
 
 ---
 
-### 第四步：手机本地 AI Agent（可选）
+### 第四步：手机本地自主 AI Agent（Local AI Agent）
 
-如需使用应用内脱机的手机本地 AI Agent：
+除了远程连接桌面端，应用内还原生内置了一套**直接运行在 Android 系统沙箱内的轻量级自主 AI Agent 引擎**。
 
-1. 点击底部「本地 Agent」标签页；
-2. 点击设置，选择服务商（如 DeepSeek、SiliconFlow、OpenAI 或局域网内运行的 Ollama `http://192.168.x.x:11434/v1`）；
-3. 填入对应的 API Key（存储于手机本地安全沙箱）；
-4. 本地 Agent 支持文件读写、网页代码生成，并自动通过内置的 `http://127.0.0.1:8765/` 服务提供应用内实时 WebView 预览。
+#### 1. 架构渊源与设计哲学
+该引擎在移动端深度吸收并融合了当今两大主流 Agent 系统的核心心智：
+- **融合 Pi Agent 的全双工与交互机制**：
+  - **全双工中途掌舵（Steering）**：手机端在 Agent 思考与执行工具时，输入通道保持畅通，支持随时注入动态引导指令（`steer`），调度器在检查点无感掉头；
+  - **交互式主动反问（Ask User Question）**：遇到方案分歧时，Agent 会主动调用反问工具，以原生触控卡片（包含推荐标记 `(推荐)`）请求用户抉择；
+- **融合 Claude Code 的工程闭环与代码修改准则**：
+  - **认识论谦逊（Epistemic Humility）**：严禁凭空臆想文件内容，必须“先探查再操作”；
+  - **局部最小差异代码编辑（Minimal Diff Editing）**：优先使用文本替换或局部 Patch，不随意大段覆写文件，保护缩进与现有结构；
+- **移动端沙箱特化（内置 Web 预览服务）**：
+  - 内置一个运行在 `127.0.0.1:8765` 的轻量 HTTP 服务器，当 Agent 编写前端/网页工具时，App 内直接以内嵌 WebView 提供即时交互式测试与预览。
+
+#### 2. Local Agent 自主执行闭环回路
+```mermaid
+flowchart TD
+    User(["👤 用户输入需求 / 实时引导 (Steer)"]) --> Dispatcher["⚙️ 本地调度状态机 (LocalAgentEngine)"]
+    Dispatcher --> LLM["🤖 LLM 推理决策 (DeepSeek / OpenAI / 局域网 Ollama)"]
+    
+    LLM --> Decision{"是否调用工具?"}
+    Decision -- "调用工具" --> ToolExec["🛠️ 本地工具沙箱执行"]
+    
+    subgraph Tools["📱 本地工具集 (LocalAgentTools)"]
+        direction TB
+        T1["📂 list_directory / read_file (检查先行)"]
+        T2["✏️ edit_file_snippet (最小局部替换)"]
+        T3["❓ ask_user_question (单选/多选交互卡片)"]
+        T4["🌐 create_webpage_project (127.0.0.1:8765 实时预览)"]
+        T5["📄 generate_word / presentation (Office 文档生成)"]
+    end
+    
+    ToolExec --> Tools
+    Tools --> Feedback["📤 工具执行结果 / 用户卡片选择回填"]
+    Feedback --> LLM
+    
+    Decision -- "生成完成" --> Summary["📝 终局总结与验证交付"]
+    Summary --> UI(["📱 App 界面流式卡片渲染"])
+```
+
+#### 3. 核心系统提示词准则（Core Directives & System Prompt）
+引擎直接运行的核心指导提示词规范如下：
+
+```text
+You are Local AI Agent, an autonomous software engineering and generative creation agent running natively inside the user's Android phone.
+Environment: Native Android application sandbox (no Termux, no root, no heavy build tools). Web assets should use CDN links or pure vanilla HTML/JS/CSS.
+
+Core Directives:
+1. Inspect First & Epistemic Humility: Never guess file contents or assume files exist. Always use `list_directory` or `read_file` to inspect the workspace before making changes.
+2. Minimal Diff Editing: Prefer `edit_file_snippet` over rewriting entire files. Preserve existing code structure, indentation, and comments. Ensure valid syntax and balanced brackets/JSON.
+3. Interactive Disambiguation (`ask_user_question`): When facing architecture choices, design forks, or ambiguous requirements, do NOT guess. Call `ask_user_question` with 2-4 concrete, distinct options (mark the recommended choice with "(推荐)"). Set `is_multi_select = true` only when choices are non-exclusive.
+4. Dynamic Steering Ingestion: Injected steering messages have highest priority. Immediately pivot ongoing plans to align with the user's real-time redirection.
+5. Rich Deliverables:
+   - Web projects: Call `create_webpage_project` (spawns an internal HTTP server at 127.0.0.1:8765 and interactive in-app WebView).
+   - Office docs: Call `generate_word_document` (.docx) or `generate_presentation` (.pptx) for rich documents viewable in WPS/Office.
+6. Execution & Synthesis: Prioritize action via tools over commentary. After completing tool calls, always provide a complete, well-reasoned final summary in Chinese explaining the solution and how to verify it.
+```
 
 ---
 
